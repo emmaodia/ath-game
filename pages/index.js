@@ -1,118 +1,243 @@
-import Image from "next/image";
-import { Inter } from "next/font/google";
+import { useEffect, useState } from "react";
+import {
+  createPublicClient,
+  http,
+  parseEther,
+  createWalletClient,
+  custom,
+  formatEther,
+} from "viem";
+import { sepolia } from "viem/chains";
+import { ABI } from "../abi"; // Ensure ABI is correctly imported
 
-const inter = Inter({ subsets: ["latin"] });
+const publicClient = createPublicClient({
+  chain: sepolia,
+  transport: http(),
+});
 
 export default function Home() {
+  const [client, setClient] = useState(null);
+  const [address, setAddress] = useState(null);
+  const [connected, setConnected] = useState(false);
+  const [houseBalance, setHouseBalance] = useState(null);
+  const [prediction, setPrediction] = useState(""); // User input for prediction
+  const [betAmount, setBetAmount] = useState(""); // Amount to bet
+  const [transactionHash, setTransactionHash] = useState(""); // Transaction hash
+  const [gameResult, setGameResult] = useState(""); // Game result (win/loss)
+  const [isLoading, setIsLoading] = useState(false); // Loading state for transaction
+  const [vrfLoading, setVrfLoading] = useState(false); // Loading state for VRF
+  const [vrfCompleted, setVrfCompleted] = useState(false); // VRF completion state
+
+  // Function to connect to MetaMask and create a wallet client
+  const connectToMetaMask = async () => {
+    if (typeof window !== "undefined" && window.ethereum !== undefined) {
+      try {
+        await window.ethereum.request({ method: "eth_requestAccounts" });
+        const walletClient = createWalletClient({
+          chain: sepolia,
+          transport: custom(window.ethereum),
+        });
+        const [userAddress] = await walletClient.getAddresses();
+        setClient(walletClient);
+        setAddress(userAddress);
+        setConnected(true);
+        console.log("Connected account:", userAddress);
+      } catch (error) {
+        console.error("User denied account access:", error);
+      }
+    } else {
+      console.log("MetaMask is not installed or not running in a browser environment!");
+    }
+  };
+
+  // Fetch the house balance from the contract
+  const fetchHouseBalance = async () => {
+    try {
+      const balance = await publicClient.readContract({
+        address: "0x82bb3fbfccfd1044662affbcab4adb79257c003e", // New contract address
+        abi: ABI,
+        functionName: "houseBalance",
+      });
+      setHouseBalance(formatEther(balance));
+    } catch (error) {
+      console.error("Failed to fetch house balance:", error);
+    }
+  };
+
+  // Handle game play logic (submitting transaction)
+  const handlePlay = async (event) => {
+    event.preventDefault();
+
+    if (!client || !address) {
+      console.error("Client or address not available");
+      return;
+    }
+
+    setIsLoading(true); // Start loading for transaction submission
+
+    try {
+      const { request } = await publicClient.simulateContract({
+        account: address,
+        address: "0x82bb3fbfccfd1044662affbcab4adb79257c003e", // New contract address
+        abi: ABI,
+        functionName: "play",
+        args: [parseInt(prediction, 10)], // Ensure prediction is an integer
+        value: parseEther(betAmount), // Convert bet amount to wei
+      });
+
+      if (!request) {
+        console.error("Simulation failed to return a valid request object.");
+        setIsLoading(false);
+        return;
+      }
+
+      // Submit transaction
+      const hash = await client.writeContract(request);
+      setTransactionHash(hash);
+
+      // Wait for the transaction to be confirmed
+      await publicClient.waitForTransactionReceipt({ hash });
+
+      setIsLoading(false); // Stop loading for transaction submission
+      setVrfLoading(true); // Start loading for VRF event
+
+      // Wait for 3 minutes (180000 ms) before fetching VRF events
+      setTimeout(() => {
+        fetchGameEvents();
+      }, 180000); // 180000 milliseconds = 3 minutes
+    } catch (error) {
+      console.error("Transaction or simulation failed:", error);
+      setIsLoading(false); // Stop loading on error
+    }
+  };
+
+  // Fetch VRF results (GameWon or GameLost events)
+  const fetchGameEvents = async () => {
+    try {
+      // We wait for GameWon or GameLost events after VRF completion
+      console.log('Listening for VRF confirmation events...');
+
+      const wonLogs = await publicClient.getContractEvents({
+        client: publicClient,
+        address: "0x82bb3fbfccfd1044662affbcab4adb79257c003e", // Contract address
+        abi: ABI,
+        eventName: "GameWon",
+        fromBlock: "latest",
+      });
+
+      if (wonLogs.length > 0) {
+        console.log('GameWon event logs:', wonLogs);
+        setGameResult("You won the game!");
+        setVrfCompleted(true); // VRF process is completed
+        setVrfLoading(false); // Stop VRF loading
+        return;
+      }
+
+      const lostLogs = await publicClient.getContractEvents({
+        client: publicClient,
+        address: "0x82bb3fbfccfd1044662affbcab4adb79257c003e", // Contract address
+        abi: ABI,
+        eventName: "GameLost",
+        fromBlock: "latest",
+      });
+
+      if (lostLogs.length > 0) {
+        console.log('GameLost event logs:', lostLogs);
+        setGameResult("You lost the game.");
+        setVrfCompleted(true); // VRF process is completed
+        setVrfLoading(false); // Stop VRF loading
+      }
+    } catch (error) {
+      console.error("Error fetching VRF events:", error);
+      setVrfLoading(false); // Stop VRF loading on error
+    }
+  };
+
+  // Fetch house balance when the client and address are ready
+  useEffect(() => {
+    if (client && address) {
+      fetchHouseBalance();
+    }
+  }, [client, address]);
+
   return (
-    <main
-      className={`flex min-h-screen flex-col items-center justify-between p-24 ${inter.className}`}
-    >
-      <div className="z-10 max-w-5xl w-full items-center justify-between font-mono text-sm lg:flex">
-        <p className="fixed left-0 top-0 flex w-full justify-center border-b border-gray-300 bg-gradient-to-b from-zinc-200 pb-6 pt-8 backdrop-blur-2xl dark:border-neutral-800 dark:bg-zinc-800/30 dark:from-inherit lg:static lg:w-auto lg:rounded-xl lg:border lg:bg-gray-200 lg:p-4 lg:dark:bg-zinc-800/30">
-          Get started by editing&nbsp;
-          <code className="font-mono font-bold">pages/index.js</code>
-        </p>
-        <div className="fixed bottom-0 left-0 flex h-48 w-full items-end justify-center bg-gradient-to-t from-white via-white dark:from-black dark:via-black lg:static lg:h-auto lg:w-auto lg:bg-none">
-          <a
-            className="pointer-events-none flex place-items-center gap-2 p-8 lg:pointer-events-auto lg:p-0"
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            By{" "}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className="dark:invert"
-              width={100}
-              height={24}
-              priority
-            />
-          </a>
+    <main className="flex min-h-screen flex-col items-center p-24">
+      {!connected ? (
+        <button
+          onClick={connectToMetaMask}
+          className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
+        >
+          Connect Wallet
+        </button>
+      ) : (
+        <div>
+          <p>Connected as: {address}</p>
+          {houseBalance !== null ? (
+            <p>House Balance: {houseBalance} Ether</p>
+          ) : (
+            <p>Loading House Balance...</p>
+          )}
+
+          <form onSubmit={handlePlay} className="mt-4">
+            <div className="mb-4">
+              <label className="block text-gray-700 text-sm font-bold mb-2">
+                Prediction (0-9):
+              </label>
+              <input
+                type="number"
+                min="0"
+                max="9"
+                value={prediction}
+                onChange={(e) => setPrediction(e.target.value)}
+                required
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+              />
+            </div>
+            <div className="mb-4">
+              <label className="block text-gray-700 text-sm font-bold mb-2">
+                Bet Amount (in ETH):
+              </label>
+              <input
+                type="text"
+                value={betAmount}
+                onChange={(e) => setBetAmount(e.target.value)}
+                required
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+              />
+            </div>
+            <button
+              type="submit"
+              className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded"
+            >
+              Play
+            </button>
+          </form>
+
+          {isLoading && (
+            <div className="mt-4">
+              <p>Submitting transaction...</p>
+            </div>
+          )}
+
+          {vrfLoading && (
+            <div className="mt-4">
+              <p>Waiting for VRF confirmation...</p>
+            </div>
+          )}
+
+          {vrfCompleted && gameResult && (
+            <div className="mt-4">
+              <p>{gameResult}</p>
+              {gameResult.includes("won") && (
+                <p className="text-green-500 font-bold">Congratulations! You won!</p>
+              )}
+              {gameResult.includes("lost") && (
+                <p className="text-red-500 font-bold">Sorry, you lost. Better luck next time!</p>
+              )}
+            </div>
+          )}
         </div>
-      </div>
-
-      <div className="relative flex place-items-center before:absolute before:h-[300px] before:w-full sm:before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-full sm:after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700/10 after:dark:from-sky-900 after:dark:via-[#0141ff]/40 before:lg:h-[360px]">
-        <Image
-          className="relative dark:drop-shadow-[0_0_0.3rem_#ffffff70] dark:invert"
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
-        />
-      </div>
-
-      <div className="mb-32 grid text-center lg:max-w-5xl lg:w-full lg:mb-0 lg:grid-cols-4 lg:text-left">
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Docs{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Find in-depth information about Next.js features and API.
-          </p>
-        </a>
-
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Learn{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Learn about Next.js in an interactive course with&nbsp;quizzes!
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Templates{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Discover and deploy boilerplate example Next.js&nbsp;projects.
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Deploy{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50 text-balance`}>
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
-      </div>
+      )}
     </main>
   );
 }
