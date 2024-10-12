@@ -6,14 +6,17 @@ import {
   createWalletClient,
   custom,
   formatEther,
+  parseAbiItem,
 } from "viem";
-import { sepolia } from "viem/chains";
+import { baseSepolia } from "viem/chains";
 import { ABI } from "../abi"; // Ensure ABI is correctly imported
 
 const publicClient = createPublicClient({
-  chain: sepolia,
+  chain: baseSepolia,
   transport: http(),
 });
+
+const CONTRACT_ADDRESS = "0xA936953aDD9E88fd32990Dbe62D83AbE84ba5226";
 
 export default function Home() {
   const [client, setClient] = useState(null);
@@ -34,7 +37,7 @@ export default function Home() {
       try {
         await window.ethereum.request({ method: "eth_requestAccounts" });
         const walletClient = createWalletClient({
-          chain: sepolia,
+          chain: baseSepolia,
           transport: custom(window.ethereum),
         });
         const [userAddress] = await walletClient.getAddresses();
@@ -46,7 +49,9 @@ export default function Home() {
         console.error("User denied account access:", error);
       }
     } else {
-      console.log("MetaMask is not installed or not running in a browser environment!");
+      console.log(
+        "MetaMask is not installed or not running in a browser environment!"
+      );
     }
   };
 
@@ -54,7 +59,7 @@ export default function Home() {
   const fetchHouseBalance = async () => {
     try {
       const balance = await publicClient.readContract({
-        address: "0x82bb3fbfccfd1044662affbcab4adb79257c003e", // New contract address
+        address: CONTRACT_ADDRESS, // New contract address
         abi: ABI,
         functionName: "houseBalance",
       });
@@ -78,7 +83,7 @@ export default function Home() {
     try {
       const { request } = await publicClient.simulateContract({
         account: address,
-        address: "0x82bb3fbfccfd1044662affbcab4adb79257c003e", // New contract address
+        address: CONTRACT_ADDRESS, // New contract address
         abi: ABI,
         functionName: "play",
         args: [parseInt(prediction, 10)], // Ensure prediction is an integer
@@ -104,7 +109,8 @@ export default function Home() {
       // Wait for 3 minutes (180000 ms) before fetching VRF events
       setTimeout(() => {
         fetchGameEvents();
-      }, 180000); // 180000 milliseconds = 3 minutes
+        console.log("here");
+      }, 90000); // 180000 milliseconds = 3 minutes
     } catch (error) {
       console.error("Transaction or simulation failed:", error);
       setIsLoading(false); // Stop loading on error
@@ -115,34 +121,48 @@ export default function Home() {
   const fetchGameEvents = async () => {
     try {
       // We wait for GameWon or GameLost events after VRF completion
-      console.log('Listening for VRF confirmation events...');
+      console.log("Listening for VRF confirmation events...");
 
       const wonLogs = await publicClient.getContractEvents({
         client: publicClient,
-        address: "0x82bb3fbfccfd1044662affbcab4adb79257c003e", // Contract address
+        address: CONTRACT_ADDRESS, // Contract address
         abi: ABI,
         eventName: "GameWon",
-        fromBlock: "latest",
+        // fromBlock: "latest",
       });
 
+      // console.log(wonLogs);
+
       if (wonLogs.length > 0) {
-        console.log('GameWon event logs:', wonLogs);
+        console.log("GameWon event logs:", wonLogs);
         setGameResult("You won the game!");
         setVrfCompleted(true); // VRF process is completed
         setVrfLoading(false); // Stop VRF loading
         return;
       }
 
+      const filter = await publicClient.createEventFilter({
+        address: CONTRACT_ADDRESS,
+        abi: ABI,
+        event: parseAbiItem(
+          "event GamePlayed(address indexed player, uint256 amount, uint256 prediction, uint256 requestId)"
+        ),
+        fromBlock: 16493251n,
+        // toBlock: "latest",
+      });
+
+      console.log(filter);
+
       const lostLogs = await publicClient.getContractEvents({
         client: publicClient,
-        address: "0x82bb3fbfccfd1044662affbcab4adb79257c003e", // Contract address
+        address: CONTRACT_ADDRESS, // Contract address
         abi: ABI,
         eventName: "GameLost",
-        fromBlock: "latest",
+        // fromBlock: "latest",
       });
 
       if (lostLogs.length > 0) {
-        console.log('GameLost event logs:', lostLogs);
+        console.log("GameLost event logs:", lostLogs);
         setGameResult("You lost the game.");
         setVrfCompleted(true); // VRF process is completed
         setVrfLoading(false); // Stop VRF loading
@@ -229,10 +249,14 @@ export default function Home() {
             <div className="mt-4">
               <p>{gameResult}</p>
               {gameResult.includes("won") && (
-                <p className="text-green-500 font-bold">Congratulations! You won!</p>
+                <p className="text-green-500 font-bold">
+                  Congratulations! You won!
+                </p>
               )}
               {gameResult.includes("lost") && (
-                <p className="text-red-500 font-bold">Sorry, you lost. Better luck next time!</p>
+                <p className="text-red-500 font-bold">
+                  Sorry, you lost. Better luck next time!
+                </p>
               )}
             </div>
           )}
